@@ -1,5 +1,4 @@
 # SHOPMART DISTRIBUTED E-COMMERCE MICROSERVICES PLATFORM
-## BÀI THI THỰC HÀNH JAVA MICROSERVICE - SESSION 14
 
 Hệ thống Microservice thương mại điện tử ShopMart nâng cấp nghiệp vụ Đặt hàng thành Giao dịch phân tán (Distributed Transaction) theo kiến trúc **Saga Pattern**, kết hợp **Spring Cloud**, **Resilience4j Circuit Breaker**, **Apache Kafka**, và **Redis Cache-Aside**.
 
@@ -27,22 +26,29 @@ e:\Test_Dau_Gio\
 ## 2. HƯỚNG DẪN KHỞI CHẠY HỆ THỐNG
 
 ### Bước 1: Khởi động Hạ tầng (Docker Compose)
+
 Mở terminal và chạy lệnh:
+
 ```bash
 docker compose up -d
 ```
+
 Lệnh này sẽ khởi tạo:
+
 - **Zookeeper**: Port 2181
 - **Apache Kafka Broker**: Port 9092
 - **Redis Cache Server**: Port 6379
 
 ### Bước 2: Biên dịch & Kiểm thử Toàn bộ Dự án
+
 ```cmd
 .\mvnw.bat clean test
 ```
+
 *Kết quả: 100% các bài test (Feign Sync, Circuit Breaker Fallback, Saga Flow, Rollback Compensating, Redis Cache-Aside) đều chạy thành công (SUCCESS).*
 
 ### Bước 3: Thứ tự Khởi chạy các Service (Run via IntelliJ hoặc Command line)
+
 1. **Config Server** (Port `8888`): Chạy `ConfigServerApplication.java`
 2. **Discovery Server** (Port `8761`): Chạy `DiscoveryServerApplication.java`
    - Truy cập Eureka Dashboard: http://localhost:8761
@@ -57,6 +63,7 @@ Lệnh này sẽ khởi tạo:
 ## 3. MINH CHỨNG & KIỂM TRA TỪNG TIÊU CHÍ ĐIỂM (100/100)
 
 ### CÂU 1: HẠ TẦNG CONFIG SERVER, EUREKA & GATEWAY (30đ)
+
 - **Config Server (Port 8888)**: Cấu hình tập trung tại `config-server/src/main/resources/config-repo/`.
 - **Eureka Dashboard**: Mở trình duyệt `http://localhost:8761`, kiểm tra danh sách instances đã đăng ký:
   - `CONFIG-SERVER`, `API-GATEWAY`, `ORDER-SERVICE`, `INVENTORY-SERVICE`, `PAYMENT-SERVICE`
@@ -70,6 +77,7 @@ Lệnh này sẽ khởi tạo:
 ### CÂU 2: GIAO TIẾP ĐỒNG BỘ FEIGNCLIENT & CIRCUIT BREAKER (20đ)
 
 #### 1. Gọi đồng bộ FeignClient có Load Balancing:
+
 ```bash
 POST http://localhost:8080/api/order/create-sync
 Content-Type: application/json
@@ -81,12 +89,15 @@ Content-Type: application/json
   "price": 30000000
 }
 ```
+
 *Response trả về thành công kèm thông tin Instance đã xử lý (Port 8082 hoặc Port 8085 minh chứng Load Balancing).*
 
 #### 2. Kiểm thử Circuit Breaker & Fallback:
+
 - Dừng `inventory-service` (hoặc gọi với mã sản phẩm lỗi).
 - Gọi lại API `POST http://localhost:8080/api/order/create-sync`.
 - **Kết quả Fallback trả về**:
+
 ```json
 {
   "orderId": -1,
@@ -95,6 +106,7 @@ Content-Type: application/json
   "message": "Inventory Service is currently unavailable. Request protected by Resilience4j Circuit Breaker..."
 }
 ```
+
 - **Log trạng thái Resilience4j**:
   - `CLOSED`: Khi service bình thường.
   - `OPEN`: Khi tỷ lệ lỗi vượt quá ngưỡng 50% (short-circuit trực tiếp vào fallback).
@@ -105,6 +117,7 @@ Content-Type: application/json
 ### CÂU 3: GIAO DỊCH PHÂN TÁN SAGA PATTERN & APACHE KAFKA (25đ)
 
 #### 1. Happy Path (Thành công trọn vẹn):
+
 ```bash
 POST http://localhost:8080/api/order/create-saga
 Content-Type: application/json
@@ -117,14 +130,18 @@ Content-Type: application/json
   "forcePaymentFailure": false
 }
 ```
+
 **Luồng Saga diễn ra:**
+
 1. `order-service`: Lưu đơn hàng trạng thái `PENDING` -> phát sự kiện `OrderCreatedEvent`.
 2. `inventory-service`: Nhận sự kiện, trừ tồn kho -> phát sự kiện `InventoryReservedEvent`.
 3. `payment-service`: Nhận sự kiện, thanh toán thành công -> phát sự kiện `PaymentCompletedEvent`.
 4. `order-service`: Nhận sự kiện thành công -> cập nhật trạng thái đơn thành `CONFIRMED`.
 
 #### 2. Rollback Path (Bù trừ giao dịch khi Thanh toán thất bại):
+
 Cố tình kích hoạt lỗi thanh toán bằng cách đặt cờ `"forcePaymentFailure": true` hoặc số tiền vượt hạn mức:
+
 ```bash
 POST http://localhost:8080/api/order/create-saga
 Content-Type: application/json
@@ -137,7 +154,9 @@ Content-Type: application/json
   "forcePaymentFailure": true
 }
 ```
+
 **Luồng Compensating / Rollback diễn ra:**
+
 1. `order-service`: Tạo đơn hàng `PENDING` -> trừ tồn kho 2 sản phẩm tại `inventory-service`.
 2. `payment-service`: Thanh toán thất bại (insufficient funds / forced failure) -> phát `PaymentFailedEvent`.
 3. `inventory-service`: Nhận `PaymentFailedEvent` -> **KÍCH HOẠT COMPENSATING TRANSACTION**: Hoàn lại đúng 2 sản phẩm vào kho!
@@ -145,7 +164,9 @@ Content-Type: application/json
 4. `order-service`: Cập nhật đơn hàng thành `CANCELLED` với lý do `Payment Failed`.
 
 #### 3. WebFlux Reactive Consumer:
+
 - Kết nối tới Stream sự kiện thời gian thực:
+
 ```bash
 GET http://localhost:8080/api/order/stream
 Accept: text/event-stream
@@ -156,26 +177,34 @@ Accept: text/event-stream
 ### CÂU 4: DISTRIBUTED CACHING VỚI REDIS (CACHE-ASIDE) (15đ)
 
 1. **Lần gọi đầu (Cache Miss -> Query DB)**:
+
    ```bash
    GET http://localhost:8080/api/inventory/PROD-001
    ```
+
    *Log hệ thống xuất hiện:* `[CACHE MISS -> DATABASE QUERY] Querying database for productCode: 'PROD-001'`
 2. **Lần gọi thứ hai trở đi (Cache Hit -> Lấy từ Redis)**:
+
    ```bash
    GET http://localhost:8080/api/inventory/PROD-001
    ```
+
    *Log không truy vấn DB nữa; dữ liệu được nạp siêu tốc từ Redis Cache.*
 3. **Cập nhật & Xóa Cache (@CachePut / @CacheEvict)**:
+
    - Cập nhật sản phẩm: `POST http://localhost:8080/api/inventory` (tự động cập nhật Cache).
    - Xóa cache: `POST http://localhost:8080/api/inventory/cache/clear`.
 
 ---
 
 ### CÂU 5: CHẤT LƯỢNG CODE, LOGGING & KIỂM THỬ (10đ)
+
 - Toàn bộ mã nguồn tuân thủ Clean Architecture, Package phân cấp rõ ràng theo chuẩn Microservice.
 - Logging chuẩn SLF4J chi tiết từng trạng thái Forward và Rollback.
 - Kiểm thử tự động chạy qua lệnh:
+
 ```cmd
 .\mvnw.bat test
 ```
+
 Toàn bộ Unit Test và Test Bù Trừ Rollback đều đạt 100% Passed.
